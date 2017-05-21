@@ -661,19 +661,18 @@ static int ata_ioc32(struct ata_port *ap)
 int ata_sas_scsi_ioctl(struct ata_port *ap, struct scsi_device *scsidev,
 		     int cmd, void __user *arg)
 {
-	int val = -EINVAL, rc = -EINVAL;
+	unsigned long val;
+	int rc = -EINVAL;
 	unsigned long flags;
 
 	switch (cmd) {
-	case ATA_IOC_GET_IO32:
+	case HDIO_GET_32BIT:
 		spin_lock_irqsave(ap->lock, flags);
 		val = ata_ioc32(ap);
 		spin_unlock_irqrestore(ap->lock, flags);
-		if (copy_to_user(arg, &val, 1))
-			return -EFAULT;
-		return 0;
+		return put_user(val, (unsigned long __user *)arg);
 
-	case ATA_IOC_SET_IO32:
+	case HDIO_SET_32BIT:
 		val = (unsigned long) arg;
 		rc = 0;
 		spin_lock_irqsave(ap->lock, flags);
@@ -2500,7 +2499,8 @@ static unsigned int ata_scsiop_read_cap(struct ata_scsi_args *args, u8 *rbuf)
 		rbuf[14] = (lowest_aligned >> 8) & 0x3f;
 		rbuf[15] = lowest_aligned;
 
-		if (ata_id_has_trim(args->id)) {
+		if (ata_id_has_trim(args->id) &&
+		    !(dev->horkage & ATA_HORKAGE_NOTRIM)) {
 			rbuf[14] |= 0x80; /* TPE */
 
 			if (ata_id_has_zero_after_trim(args->id))
@@ -3614,6 +3614,7 @@ int ata_scsi_add_hosts(struct ata_host *host, struct scsi_host_template *sht)
 		shost->max_lun = 1;
 		shost->max_channel = 1;
 		shost->max_cmd_len = 16;
+		shost->no_write_same = 1;
 
 		/* Schedule policy is determined by ->qc_defer()
 		 * callback and it needs to see every deferred qc.
@@ -3862,6 +3863,27 @@ void ata_scsi_hotplug(struct work_struct *work)
 		DPRINTK("ENTER/EXIT - unloading\n");
 		return;
 	}
+
+	/*
+	 * XXX - UGLY HACK
+	 *
+	 * The block layer suspend/resume path is fundamentally broken due
+	 * to freezable kthreads and workqueue and may deadlock if a block
+	 * device gets removed while resume is in progress.  I don't know
+	 * what the solution is short of removing freezable kthreads and
+	 * workqueues altogether.
+	 *
+	 * The following is an ugly hack to avoid kicking off device
+	 * removal while freezer is active.  This is a joke but does avoid
+	 * this particular deadlock scenario.
+	 *
+	 * https://bugzilla.kernel.org/show_bug.cgi?id=62801
+	 * http://marc.info/?l=linux-kernel&m=138695698516487
+	 */
+#ifdef CONFIG_FREEZER
+	while (pm_freezing)
+		msleep(10);
+#endif
 
 	DPRINTK("ENTER\n");
 	mutex_lock(&ap->scsi_scan_mutex);

@@ -250,12 +250,19 @@ static efi_status_t __init phys_efi_set_virtual_address_map(
 	efi_memory_desc_t *virtual_map)
 {
 	efi_status_t status;
+	unsigned long flags;
 
 	efi_call_phys_prelog();
+
+	/* Disable interrupts around EFI calls: */
+	local_irq_save(flags);
 	status = efi_call_phys4(efi_phys.set_virtual_address_map,
 				memory_map_size, descriptor_size,
 				descriptor_version, virtual_map);
+	local_irq_restore(flags);
+
 	efi_call_phys_epilog();
+
 	return status;
 }
 
@@ -765,13 +772,6 @@ void __init efi_init(void)
 		return;
 
 	set_bit(EFI_MEMMAP, &x86_efi_facility);
-
-#ifdef CONFIG_X86_32
-	if (efi_is_native()) {
-		x86_platform.get_wallclock = efi_get_time;
-		x86_platform.set_wallclock = efi_set_rtc_mmss;
-	}
-#endif
 
 #if EFI_DEBUG
 	print_efi_memmap();
